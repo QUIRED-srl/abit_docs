@@ -2,8 +2,7 @@
 
 Documentazione statica delle integrazioni ABIT, pubblicata con GitHub Pages.
 
-- Sito: <https://quired-srl.github.io/abit_docs/>
-- Documentazione PMS: <https://quired-srl.github.io/abit_docs/docs/integrazioni/pms/>
+- Sito: <https://docs.abit.quired.it/>
+- Documentazione PMS: <https://docs.abit.quired.it/integrazioni/pms/>
 
-Ogni aggiornamento del branch `main` viene pubblicato tramite
-`.github/workflows/pages.yml`.
+GitHub Pages pubblica direttamente la cartella `/docs` del branch `main`.
