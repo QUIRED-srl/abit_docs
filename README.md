@@ -1,13 +1,9 @@
 # ABIT Docs
 
-Documentazione della piattaforma ABIT.
+Documentazione statica delle integrazioni ABIT, pubblicata con GitHub Pages.
 
-Questo repository raccoglie la documentazione tecnica e funzionale relativa alla piattaforma, incluse specifiche, procedure e materiali di supporto.
+- Sito: <https://quired-srl.github.io/abit_docs/>
+- Documentazione PMS: <https://quired-srl.github.io/abit_docs/docs/integrazioni/pms/>
 
-## Stato del repository
-
-La documentazione è in fase di organizzazione e aggiornamento.
-
-## Contributi
-
-Per proporre modifiche o integrazioni, aprire una issue o una pull request.
+Ogni aggiornamento del branch `main` viene pubblicato tramite
+`.github/workflows/pages.yml`.
