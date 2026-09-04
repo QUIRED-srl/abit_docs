@@ -1,0 +1,12 @@
+openapi: 3.0.3
+info:
+  title: ABIT API
+  version: 1.0.0
+  description: |
+    The ABIT API documentation is being prepared.
+
+    The complete versioned API contract will be published here.
+servers:
+  - url: https://abit.so.it
+    description: Production
+paths: {}
