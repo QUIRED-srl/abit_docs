@@ -197,6 +197,23 @@ components:
                 $ref: '#/components/schemas/Error'
               -
                 $ref: '#/components/schemas/SendResult'
+          examples:
+            invalidGroupComposition:
+              summary: 'Composizione del gruppo non valida'
+              value:
+                message: 'Il gruppo non può essere vuoto.'
+            invalidResidenceCode:
+              summary: 'Codice residenza non valido'
+              value:
+                total: 1
+                successCount: 0
+                failureCount: 1
+                details:
+                  -
+                    index: 0
+                    guestId: ospite-123
+                    success: false
+                    error: 'Codice residenza non valido'
     NotFound:
       description: 'The requested city, license, or guest group was not found.'
       content:
