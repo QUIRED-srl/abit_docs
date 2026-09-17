@@ -4,17 +4,24 @@ info:
   title: 'ABIT External API'
   version: 1.0.0
   description: |
-    APIs for external PMS integrations, ISTAT session clients, the public
+    APIs for external PMS integrations, ISTAT web auth clients, the public
     accommodation catalogue, and public city-tax exemptions. Frontend-only
     authentication, administration, and manager operations are excluded.
+    This specification documents the preferred /api/v1 URLs. Existing clients can
+    continue using /integration/v1,
+    /api/istat, /Osservatorio/RESTServices/*.ashx,
+    and /rest with their original authentication and request/response formats.
+    ISTAT and Integration are separate API contracts; moving between them requires
+    a client adaptation, not just a URL change. No legacy removal date is set.
     The accommodation catalogue is available at /api/v1/accommodations.
-    Public city-tax exemptions are available at /api/v1/citytax/esenzioni
-    with their existing response formats and public access.
+    Public city-tax exemptions are available at /api/v1/city-tax/exemptions/{cityCode}
+    with English response fields and public access. The original /citytax/v1/esenzioni/{city_code} and its /html view remain available
+    with their Italian response format.
 
     Exchange an APPLICATION user's credentials for a 24-hour opaque token at
     `POST /api/v1/token`, then send that token as `Authorization: Bearer <token>`
     to the protected PMS integration operations. The `/api/v1/istat`
-    operations use a browser-style session:
+    operations use web auth with a browser-style session:
     first GET / to obtain the session and XSRF-TOKEN cookies, then send the
     URL-decoded XSRF-TOKEN value as `X-XSRF-TOKEN` on the login request and all
     subsequent state-changing requests. Retain cookies updated by login.
@@ -26,23 +33,16 @@ servers:
   -
     url: 'https://abit.so.it'
     description: Production
+  -
+    url: /
+    description: 'Current deployment (or replace with your instance origin)'
 tags:
   -
-    name: Authentication
+    name: 'Integration APIs'
+    description: 'PMS integration endpoints. Exchange HTTP Basic credentials for a Bearer token using the token endpoint.'
   -
-    name: Licenses
-  -
-    name: 'Tax exemptions'
-  -
-    name: 'Guest groups'
-  -
-    name: 'Closure days'
-  -
-    name: 'ISTAT session authentication'
-  -
-    name: 'ISTAT session guests'
-  -
-    name: 'ISTAT session calendar'
+    name: 'ISTAT APIs'
+    description: 'ISTAT guest and calendar endpoints. Authenticate using the web auth login endpoint and retain session cookies and CSRF headers.'
   -
     name: 'Accommodation catalogue'
   -
@@ -56,7 +56,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: 'Opaque token'
-    sessionCookie:
+    webAuth:
       type: apiKey
       in: cookie
       name: abit_session
@@ -78,14 +78,6 @@ components:
       schema:
         type: integer
         minimum: 1
-    CityCode:
-      name: cityCode
-      in: path
-      required: true
-      description: 'ISTAT municipality code returned by the licenses endpoint.'
-      schema:
-        type: string
-      example: A123456
     LeaderId:
       name: leaderId
       in: path
@@ -305,19 +297,6 @@ components:
             - rooms
             - apartments
             - apartment_rooms
-    TaxExemption:
-      type: object
-      required:
-        - code
-        - description
-      additionalProperties: false
-      properties:
-        code:
-          type: string
-          example: '3'
-        description:
-          type: string
-          example: 'Minori fino a 14 anni'
     GuestGroupRequest:
       type: object
       required:
@@ -879,44 +858,44 @@ components:
     PublicCityTaxExemptions:
       type: object
       required:
-        - comune
-        - codice_istat
-        - codice_ps
-        - provincia
-        - regione
-        - esenzioni
+        - city
+        - istatCode
+        - psCode
+        - province
+        - region
+        - exemptions
       properties:
-        comune:
+        city:
           type: string
           example: Bormio
-        codice_istat:
+        istatCode:
           type: string
           example: '014009'
-        codice_ps:
+        psCode:
           type: string
           nullable: true
-        provincia:
+        province:
           type: string
           description: 'Province name followed by its ISTAT code in parentheses.'
-        regione:
+        region:
           type: string
-        esenzioni:
+        exemptions:
           type: array
           items:
             $ref: '#/components/schemas/PublicCityTaxExemption'
     PublicCityTaxExemption:
       type: object
       required:
-        - codice
-        - nome
-        - descrizione
+        - code
+        - name
+        - description
       properties:
-        codice:
-          type: string
+        code:
+          type: integer
           nullable: true
-        nome:
+        name:
           type: string
-        descrizione:
+        description:
           type: string
           nullable: true
 security:
@@ -1035,42 +1014,17 @@ paths:
                 $ref: '#/components/schemas/AccommodationCityListResponse'
         '429':
           $ref: '#/components/responses/TooManyRequests'
-  '/api/v1/city-tax/{cityCode}/exemptions':
-    get:
-      tags:
-        - 'Tax exemptions'
-      summary: 'List city-tax exemptions'
-      description: 'Returns exemption codes configured for an Italian municipality.'
-      operationId: listIntegrationTaxExemptions
-      parameters:
-        -
-          $ref: '#/components/parameters/CityCode'
-      responses:
-        '200':
-          description: 'Exemption codes ordered by code.'
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/TaxExemption'
-        '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-  '/api/v1/citytax/esenzioni/{city_code}':
+  '/api/v1/city-tax/exemptions/{cityCode}':
     get:
       tags:
         - 'Public tax exemptions'
       summary: 'List public city-tax exemptions'
-      description: 'Public endpoint returning municipality metadata and exemption codes in Italian. It does not require an integration token.'
+      description: 'Public endpoint returning municipality metadata and exemption codes with English field names. It does not require an integration token.'
       operationId: listPublicCityTaxExemptions
       security: []
       parameters:
         -
-          name: city_code
+          name: cityCode
           in: path
           required: true
           description: 'ISTAT municipality code, preserving leading zeroes.'
@@ -1090,7 +1044,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LegacyErrorResponse'
-  '/api/v1/citytax/esenzioni/{city_code}/html':
+  '/api/v1/city-tax/exemptions/{cityCode}/html':
     get:
       tags:
         - 'Public tax exemptions'
@@ -1100,7 +1054,7 @@ paths:
       security: []
       parameters:
         -
-          name: city_code
+          name: cityCode
           in: path
           required: true
           description: 'ISTAT municipality code, preserving leading zeroes.'
@@ -1114,15 +1068,21 @@ paths:
             text/html:
               schema:
                 type: string
+        '422':
+          description: 'Municipality code is missing or unknown.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyErrorResponse'
   '/api/v1/istat/calendar/{license}':
     post:
       tags:
-        - 'ISTAT session calendar'
+        - 'ISTAT APIs'
       summary: 'Create or update a calendar day'
       operationId: upsertIstatSessionCalendarDay
       security:
         -
-          sessionCookie: []
+          webAuth: []
           xsrfToken: []
       requestBody:
         required: true
@@ -1149,12 +1109,12 @@ paths:
   '/api/v1/istat/calendar/{license}/{date}':
     get:
       tags:
-        - 'ISTAT session calendar'
+        - 'ISTAT APIs'
       summary: 'Get a calendar day'
       operationId: getIstatSessionCalendarDay
       security:
         -
-          sessionCookie: []
+          webAuth: []
       responses:
         '200':
           description: 'Calendar day found.'
@@ -1175,12 +1135,12 @@ paths:
           $ref: '#/components/parameters/LegacyCalendarDate'
     delete:
       tags:
-        - 'ISTAT session calendar'
+        - 'ISTAT APIs'
       summary: 'Delete a calendar day'
       operationId: deleteIstatSessionCalendarDay
       security:
         -
-          sessionCookie: []
+          webAuth: []
           xsrfToken: []
       responses:
         '200':
@@ -1203,12 +1163,12 @@ paths:
   '/api/v1/istat/guest/{license}':
     post:
       tags:
-        - 'ISTAT session guests'
+        - 'ISTAT APIs'
       summary: 'Create or update a guest'
       operationId: upsertIstatSessionGuest
       security:
         -
-          sessionCookie: []
+          webAuth: []
           xsrfToken: []
       requestBody:
         required: true
@@ -1235,7 +1195,7 @@ paths:
   '/api/v1/istat/guest/{license}/{external_id}':
     post:
       tags:
-        - 'ISTAT session guests'
+        - 'ISTAT APIs'
       summary: 'Create or update a group member'
       description: |
         The path external_id identifies the group leader (parent_external_id
@@ -1245,7 +1205,7 @@ paths:
       operationId: upsertIstatSessionGroupMember
       security:
         -
-          sessionCookie: []
+          webAuth: []
           xsrfToken: []
       requestBody:
         required: true
@@ -1273,13 +1233,13 @@ paths:
           $ref: '#/components/parameters/LegacyExternalId'
     put:
       tags:
-        - 'ISTAT session guests'
+        - 'ISTAT APIs'
       summary: "Update a guest's departure date"
       description: 'The path external_id identifies the guest to update.'
       operationId: updateIstatSessionGuestDeparture
       security:
         -
-          sessionCookie: []
+          webAuth: []
           xsrfToken: []
       requestBody:
         required: true
@@ -1308,12 +1268,12 @@ paths:
   '/api/v1/istat/guest/{license}/{external_id}/{arrival_date}':
     get:
       tags:
-        - 'ISTAT session guests'
+        - 'ISTAT APIs'
       summary: 'Get a guest'
       operationId: getIstatSessionGuest
       security:
         -
-          sessionCookie: []
+          webAuth: []
       responses:
         '200':
           description: 'Guest found.'
@@ -1336,12 +1296,12 @@ paths:
           $ref: '#/components/parameters/LegacyArrivalDate'
     delete:
       tags:
-        - 'ISTAT session guests'
+        - 'ISTAT APIs'
       summary: 'Delete a guest'
       operationId: deleteIstatSessionGuest
       security:
         -
-          sessionCookie: []
+          webAuth: []
           xsrfToken: []
       responses:
         '200':
@@ -1366,15 +1326,15 @@ paths:
   /api/v1/istat/login:
     post:
       tags:
-        - 'ISTAT session authentication'
-      summary: 'Log in to the ISTAT session API'
+        - 'ISTAT APIs'
+      summary: 'Log in using ISTAT web auth'
       description: |
         Creates the session used by the remaining ISTAT operations and returns
         the IDs of the licenses available to the authenticated user.
       operationId: loginIstatSession
       security:
         -
-          sessionCookie: []
+          webAuth: []
           xsrfToken: []
       requestBody:
         required: true
@@ -1409,7 +1369,7 @@ paths:
   /api/v1/licenses:
     get:
       tags:
-        - Licenses
+        - 'Integration APIs'
       summary: 'List accessible licenses'
       description: 'Returns the licenses explicitly granted to the authenticated integrator.'
       operationId: listIntegrationLicenses
@@ -1429,7 +1389,7 @@ paths:
   '/api/v1/licenses/{licenseId}/calendar/{year}/{month}/days':
     get:
       tags:
-        - 'Closure days'
+        - 'Integration APIs'
       summary: 'List the days in a month'
       description: 'Returns every calendar day in the requested month with its computed status.'
       operationId: listIntegrationClosureDays
@@ -1462,7 +1422,7 @@ paths:
   '/api/v1/licenses/{licenseId}/calendar/{year}/{month}/{day}/toggle':
     post:
       tags:
-        - 'Closure days'
+        - 'Integration APIs'
       summary: 'Toggle a day open or closed'
       description: |
         Reopens a closed day or closes an open day. A day cannot be closed when
@@ -1497,7 +1457,7 @@ paths:
   '/api/v1/licenses/{licenseId}/groups':
     post:
       tags:
-        - 'Guest groups'
+        - 'Integration APIs'
       summary: 'Create a guest group'
       description: |
         Creates a new stay. A group is identified by its leader's external ID
@@ -1539,7 +1499,7 @@ paths:
   '/api/v1/licenses/{licenseId}/groups/{leaderId}/{arrivalDate}':
     put:
       tags:
-        - 'Guest groups'
+        - 'Integration APIs'
       summary: 'Replace a guest group'
       description: |
         Atomically replaces an existing group. The leader's `id` and
@@ -1580,7 +1540,7 @@ paths:
           $ref: '#/components/parameters/ArrivalDate'
     delete:
       tags:
-        - 'Guest groups'
+        - 'Integration APIs'
       summary: 'Delete a guest group'
       description: 'Deletes the matching leader and all its members.'
       operationId: deleteIntegrationGuestGroup
@@ -1611,7 +1571,7 @@ paths:
   /api/v1/token:
     post:
       tags:
-        - Authentication
+        - 'Integration APIs'
       summary: 'Issue an integration token'
       description: |
         Exchanges HTTP Basic credentials belonging to an active APPLICATION
