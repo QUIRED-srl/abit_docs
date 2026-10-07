@@ -10,7 +10,7 @@ GitHub Pages pubblica direttamente la cartella `/docs` del branch `main`.
 
 ## Aggiornamento Swagger (ABIT-CR-12)
 
-Il file `docs/integrazioni/swagger/swagger.yaml` è allineato allo snapshot
-`docs/swagger-cr12.yaml` del repository ABIT (surface #28–#34).
-Dopo il merge delle PR di implementazione su `development`, rigenerare e
-risincronizzare con `./scripts/sync-abit-docs-swagger.sh` da ABIT.
+Il file `docs/integrazioni/swagger/swagger.yaml` è una copia di
+`docs/swagger.yaml` del branch `development` del repository ABIT.
+A ogni modifica delle API, rigenerarlo in ABIT (`php artisan swagger:generate`)
+e risincronizzarlo con `./scripts/sync-abit-docs-swagger.sh`.

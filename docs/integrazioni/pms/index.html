@@ -229,8 +229,9 @@ supporto nella configurazione del PMS.</p>
 <h4 id="integration-api">API di integrazione PMS (CR ABIT-CR-12)</h4>
 <p>
   Oltre al caricamento file e ai servizi legacy, ABIT espone un’API REST versionata
-  per i gestionali PMS sotto <code>/api/v1</code>
-  (alias di compatibilità <code>/integration/v1</code>).
+  per i gestionali PMS sotto <code>/api/v1</code>.
+  Le route legacy <code>/integration/v1</code> restano disponibili solo per token, licenze e
+  POST/PUT/DELETE dei gruppi, con lo stesso contratto dei dati.
   Il contratto machine-readable è pubblicato in
   <a href="../swagger/">Swagger</a>.
 </p>
@@ -249,7 +250,9 @@ supporto nella configurazione del PMS.</p>
       L’endpoint <code>POST …/toggle</code> è <strong>rimosso</strong>.</li>
   <li><strong>Provenienza</strong> — <code>GET /countries</code>, <code>GET /provinces</code> (<code>ps_code</code> / <code>istat_code</code>)</li>
   <li><strong>Gruppi e ospiti</strong> — contratto a PII ridotta (solo anno di nascita; niente nome/cognome);
-      create/replace/delete gruppo; GET gruppo; PATCH partenza di massa; GET/PATCH/DELETE soggiorno; PUT aggiunta membro</li>
+      create/replace/delete gruppo; GET gruppo; PATCH partenza di massa; GET/PATCH/DELETE soggiorno; PUT aggiunta membro.
+      Il PATCH del soggiorno accetta solo i campi modificabili in base ai mesi chiusi; per un ospite con più
+      soggiorni indicare <code>?arrivalDate=</code>. I soggiorni sovrapposti dello stesso ospite sono rifiutati.</li>
   <li><strong>Mesi chiusi</strong> — <code>GET …/closed-months/{year}</code> (mese + data di chiusura; <strong>senza totals</strong>)</li>
 </ul>
 <p>
