@@ -103,7 +103,16 @@ components:
         type: string
         maxLength: 128
       description: |
-        External stay identifier (`guests.external_id`). Must uniquely identify a stay within the license; ambiguous matches return 409.
+        External guest identifier (`guests.external_id`). A returning guest has one stay per arrival; when several stays share this id, select one with the `arrivalDate` query parameter, otherwise the request returns 409.
+    StayArrivalDate:
+      name: arrivalDate
+      in: query
+      required: false
+      description: |
+        Arrival date (YYYY-MM-DD) of the stay to use when the guest has several stays in the license. An invalid date returns 400; no stay with this arrival returns 404.
+      schema:
+        type: string
+        format: date
     Year:
       name: year
       in: path
@@ -405,11 +414,14 @@ components:
         arrivalDate:
           type: string
           format: date
-          description: 'Must not be in the future or in a finalized period.'
+          description: |
+            Must not be in the future or in a finalized month. The stay must not overlap another stay of the same guest in the license; a new stay may start on the previous departure day.
         departureDate:
           type: string
           format: date
-          description: 'Must be later than arrivalDate.'
+          nullable: true
+          description: |
+            Must be later than arrivalDate and not in a finalized month; null while unknown. Once the license has an end date it is required and must not be later than that date.
         room_number:
           type: string
           minLength: 1
@@ -429,40 +441,27 @@ components:
         is_not_tourist:
           type: boolean
           default: false
-          description: 'Optional; defaults to false when omitted.'
+          description: 'Optional JSON boolean; false when omitted or null. Any other value is rejected.'
         reduced_tax:
           type: boolean
           default: false
-          description: 'Optional reduced city-tax flag; defaults to false when omitted.'
+          description: 'Optional reduced city-tax flag, JSON boolean; false when omitted or null. Any other value is rejected.'
         citytaxExemptionCode:
           type: string
           nullable: true
-          description: 'Optional city-tax exemption code for the license city.'
+          description: |
+            Optional whole-number code (digit string or JSON integer) of an exemption of the license city; null or omitted means none.
           example: '3'
     GuestStayPatchRequest:
       type: object
       additionalProperties: false
       description: |
-        Partial update when the stay arrival month is open. Rejected fields (firstName, lastName, birthDate, residenceCode, taxExeptionCode, roomNumber) return 400. Closed arrival month → 400 fail-closed.
+        Send only the fields to change. Which fields are editable depends on the finalized months (CR-12 edit matrix): with the arrival month open, every property below; with the arrival month finalized and the departure unknown or in an open month, only departureDate, reduced_tax and citytaxExemptionCode; with both months finalized, none. leaderId, guestType, birth_year and gender are never editable; move a guest to another group with DELETE and PUT .../guests. The arrivalDate of a family/group component is part of the group identity and cannot change. A request with any field outside the allowed set returns 400 and changes nothing, as do removed field names (firstName, lastName, birthDate, residenceCode, taxExeptionCode, roomNumber).
       properties:
         id:
           type: string
           maxLength: 128
-        guestType:
-          type: integer
-          enum:
-            - 16
-            - 17
-            - 18
-            - 19
-            - 20
-        birth_year:
-          type: integer
-        gender:
-          type: string
-          enum:
-            - M
-            - F
+          description: 'Optional; must equal the path guestId.'
         ps_code:
           type: string
         istat_code:
@@ -487,10 +486,6 @@ components:
         citytaxExemptionCode:
           type: string
           nullable: true
-        leaderId:
-          type: string
-          nullable: true
-          description: 'Reparent to this leader external id (same arrivalDate required).'
     GuestAddRequest:
       type: object
       required:
@@ -1947,12 +1942,19 @@ paths:
         Valid compositions are: type 16 alone; type 17 with one or more type 19
         members; or type 18 with one or more type 20 members. A composite group
         can return HTTP 200 with mixed per-member results when at least one member
-        is valid. Duplicate guest IDs within a group are rejected.
+        is valid. Duplicate guest IDs within a group are rejected; IDs are
+        compared case-insensitively. Every member must have the leader's
+        arrivalDate.
 
         Removed/renamed member fields (`firstName`, `lastName`, `birthDate`,
         `residenceCode`, `taxExeptionCode`, `roomNumber`) are **rejected** with a
         per-guest error — they are not silently ignored. No first/last name is
         stored or returned.
+
+        A guest also fails when its arrival or departure falls in a finalized
+        month, when its stay overlaps another stay of the same guest in the
+        license, or when it breaks the license end date. A new group never
+        changes the guests of another group.
       operationId: createIntegrationGuestGroup
       parameters:
         -
@@ -2027,8 +2029,9 @@ paths:
         inside a single DB transaction. departureDate must be a valid calendar date.
         Both existing non-null departures and the new departure must be in an open month.
         If any guest fails closed-month or
-        date validation, the whole update is rejected (400) with per-guest
-        details — no silent partial success.
+        date validation, or the new departure makes its stay overlap another
+        stay of the same guest, the whole update is rejected (400) with
+        per-guest details — no silent partial success.
       operationId: patchIntegrationGuestGroupDeparture
       parameters:
         -
@@ -2071,7 +2074,9 @@ paths:
         arrivalDate: the previous leader and all members are deleted, then the
         request body is inserted as the new group. The leader's `id` and
         `arrivalDate` in the body must match the path. If any guest is invalid,
-        the original group remains unchanged.
+        the original group remains unchanged. A group with any guest arriving
+        in a finalized month cannot be replaced (400). Guests follow the same rules as in
+        group creation; the group's own previous stays never count as overlaps.
       operationId: replaceIntegrationGuestGroup
       requestBody:
         required: true
@@ -2112,7 +2117,8 @@ paths:
       description: |
         Deletes the **entire group** identified by leaderId + arrivalDate (leader
         and all members). Returns 404 with message "Group not found." when no
-        matching leader exists.
+        matching leader exists, and 400 when any guest of the group arrived in
+        a finalized month.
       operationId: deleteIntegrationGuestGroup
       responses:
         '200':
@@ -2149,6 +2155,7 @@ paths:
         Adds one member (type 19 or 20) to the group identified by leaderId +
         arrivalDate. Path includes arrivalDate for parity with PUT/DELETE group.
         Body uses the reduced-PII contract. Fail-closed on closed months.
+        Returns 409 when the guest already has a stay overlapping this one.
       operationId: addIntegrationGuestToGroup
       parameters:
         -
@@ -2188,7 +2195,8 @@ paths:
         - 'Integration APIs'
       summary: 'Get a single guest stay'
       description: |
-        Returns one stay by external guestId (unique within the license).
+        Returns one stay by external guestId; for a returning guest, select the
+        stay with the arrivalDate query parameter.
         Reduced-PII contract: no first/last name; birth_year only.
       operationId: getIntegrationGuestStay
       parameters:
@@ -2196,6 +2204,8 @@ paths:
           $ref: '#/components/parameters/LicenseId'
         -
           $ref: '#/components/parameters/GuestId'
+        -
+          $ref: '#/components/parameters/StayArrivalDate'
       responses:
         '200':
           description: 'Stay found.'
@@ -2218,17 +2228,20 @@ paths:
         - 'Integration APIs'
       summary: 'Update a guest stay'
       description: |
-        Partial update of allowed fields when the stay arrival month is open.
-        Fail-closed if arrival month is finalized, or if new arrival/departure
-        falls in a closed month. Rejects legacy PII field names.
-        Dates must be valid calendar dates; birth_year must be a four-digit year.
-        Changes must preserve valid source and destination group compositions.
+        Partial update following the CR-12 edit matrix described on the request
+        body: the editable fields depend on whether the arrival and departure
+        months are finalized, and leaderId, guestType, birth_year and gender
+        never change. New dates must be valid, outside finalized months and
+        within the license validity. Returns 409 when the changed dates overlap
+        another stay of the same guest, or when the guestId is ambiguous.
       operationId: patchIntegrationGuestStay
       parameters:
         -
           $ref: '#/components/parameters/LicenseId'
         -
           $ref: '#/components/parameters/GuestId'
+        -
+          $ref: '#/components/parameters/StayArrivalDate'
       requestBody:
         required: true
         content:
@@ -2267,6 +2280,8 @@ paths:
           $ref: '#/components/parameters/LicenseId'
         -
           $ref: '#/components/parameters/GuestId'
+        -
+          $ref: '#/components/parameters/StayArrivalDate'
       responses:
         '200':
           description: 'Stay deleted.'
