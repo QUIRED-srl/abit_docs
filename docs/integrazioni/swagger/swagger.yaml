@@ -13,7 +13,7 @@ info:
     and /rest with their original authentication and request/response formats.
     ISTAT and Integration are separate API contracts; moving between them requires
     a client adaptation, not just a URL change. No legacy removal date is set.
-    The accommodation catalogue is available at /api/v1/accommodations.
+    The /integration/v1 aliases cover token issuance, license listing, and group POST/PUT/DELETE. New city-code, calendar, provenance, group GET/PATCH, guest, and closed-month endpoints are available only under `/api/v1`. License-scoped integration operations return 403 when the integrator lacks access. The accommodation catalogue is available at /api/v1/accommodations.
     Public city-tax exemptions are available at /api/v1/city-tax/exemptions/{cityCode}
     with English response fields and public access. The original /citytax/v1/esenzioni/{city_code} and its /html view remain available
     with their Italian response format.
@@ -91,7 +91,25 @@ components:
       name: arrivalDate
       in: path
       required: true
-      description: 'Arrival date of the stay.'
+      description: 'Valid calendar date of the stay in YYYY-MM-DD format. Invalid arrival dates return HTTP 400 before group lookup.'
+      schema:
+        type: string
+        format: date
+    GuestId:
+      name: guestId
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 128
+      description: |
+        External guest identifier (`guests.external_id`). A returning guest has one stay per arrival; when several stays share this id, select one with the `arrivalDate` query parameter, otherwise the request returns 409.
+    StayArrivalDate:
+      name: arrivalDate
+      in: query
+      required: false
+      description: |
+        Arrival date (YYYY-MM-DD) of the stay to use when the guest has several stays in the license. An invalid date returns 400; no stay with this arrival returns 404.
       schema:
         type: string
         format: date
@@ -272,6 +290,9 @@ components:
         - cityCode
         - rooms
         - occupancyType
+        - accommodation_type
+        - apartments
+        - alias
       additionalProperties: false
       properties:
         id:
@@ -297,6 +318,36 @@ components:
             - rooms
             - apartments
             - apartment_rooms
+        accommodation_type:
+          type: string
+          nullable: true
+          description: 'Human-readable accommodation type description (never a bare internal code when a description exists).'
+          example: 'Albergo 1 stella'
+        apartments:
+          type: integer
+          nullable: true
+          minimum: 0
+          example: 3
+        alias:
+          type: string
+          nullable: true
+          description: 'Optional integrator-facing alias for the license.'
+          example: 'Hotel Example - Centro'
+    CityCode:
+      type: object
+      required:
+        - cityCode
+        - name
+      additionalProperties: false
+      properties:
+        cityCode:
+          type: string
+          description: 'ISTAT municipality code usable as cityCode on licenses and tax exemptions.'
+          example: A123456
+        name:
+          type: string
+          description: 'Municipality display name.'
+          example: Sondrio
     GuestGroupRequest:
       type: object
       required:
@@ -313,20 +364,17 @@ components:
       required:
         - id
         - guestType
-        - firstName
-        - lastName
-        - birthDate
+        - birth_year
         - gender
-        - residenceCode
+        - ps_code
         - arrivalDate
         - departureDate
-        - roomNumber
       additionalProperties: false
       properties:
         id:
           type: string
           maxLength: 128
-          description: 'Stable external guest identifier.'
+          description: 'Stable external guest identifier. Never a personal name.'
           example: guest-12345
         guestType:
           type: integer
@@ -339,45 +387,168 @@ components:
           description: |
             16 single guest; 17 family leader; 18 group leader;
             19 family member; 20 group member.
-        firstName:
-          type: string
-          example: Mario
-        lastName:
-          type: string
-          example: Rossi
-        birthDate:
-          type: string
-          format: date
-          example: '1985-06-15'
+        birth_year:
+          type: integer
+          minimum: 1900
+          description: 'Birth year only (YYYY). Full birth dates are not accepted.'
+          example: 1985
         gender:
           type: string
           enum:
             - M
             - F
-        residenceCode:
+        ps_code:
           type: string
-          description: 'Italian city PS code or foreign country PS code.'
+          description: |
+            Nation code (`countries.ps_code`), same field as the guest import
+            file origin_country. Use GET /api/v1/countries?q= to resolve names.
           example: '100000100'
-        arrivalDate:
-          type: string
-          format: date
-          description: 'Must not be in the future or in a finalized period.'
-        departureDate:
-          type: string
-          format: date
-          description: 'Must be later than arrivalDate.'
-        roomNumber:
-          type: string
-          minLength: 1
-          description: 'Room occupied by this guest.'
-          example: '101'
-        taxExeptionCode:
+        istat_code:
           type: string
           nullable: true
           description: |
-            Optional city-tax exemption code. The spelling `Exeption` is part
-            of the API contract and is intentionally retained.
+            Province code (`provinces.istat_code`) required when ps_code is
+            Italia (100000100); must be omitted for foreign nations. Same field
+            as import origin_province. Use GET /api/v1/provinces?q= to resolve.
+          example: MI
+        arrivalDate:
+          type: string
+          format: date
+          description: |
+            Must not be in the future or in a finalized month. The stay must not overlap another stay of the same guest in the license; a new stay may start on the previous departure day.
+        departureDate:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            Must be later than arrivalDate and not in a finalized month; null while unknown. Once the license has an end date it is required and must not be later than that date.
+        room_number:
+          type: string
+          minLength: 1
+          nullable: true
+          description: |
+            Room occupied by this guest (`guests.room_number`). Required when
+            the license occupancy type is rooms or apartment_rooms.
+          example: '101'
+        apartment_number:
+          type: string
+          minLength: 1
+          nullable: true
+          description: |
+            Apartment occupied by this guest (`guests.apartment_number`).
+            Required when the license occupancy type is apartments.
+          example: A2
+        is_not_tourist:
+          type: boolean
+          default: false
+          description: 'Optional JSON boolean; false when omitted or null. Any other value is rejected.'
+        reduced_tax:
+          type: boolean
+          default: false
+          description: 'Optional reduced city-tax flag, JSON boolean; false when omitted or null. Any other value is rejected.'
+        citytaxExemptionCode:
+          type: string
+          nullable: true
+          description: |
+            Optional whole-number code (digit string or JSON integer) of an exemption of the license city; null or omitted means none.
           example: '3'
+    GuestStayPatchRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        Send only the fields to change. Which fields are editable depends on the finalized months (CR-12 edit matrix): with the arrival month open, every property below; with the arrival month finalized and the departure unknown or in an open month, only departureDate, reduced_tax and citytaxExemptionCode; with both months finalized, none. leaderId, guestType, birth_year and gender are never editable; move a guest to another group with DELETE and PUT .../guests. The arrivalDate of a family/group component is part of the group identity and cannot change. A request with any field outside the allowed set returns 400 and changes nothing, as do removed field names (firstName, lastName, birthDate, residenceCode, taxExeptionCode, roomNumber).
+      properties:
+        id:
+          type: string
+          maxLength: 128
+          description: 'Optional; must equal the path guestId.'
+        ps_code:
+          type: string
+        istat_code:
+          type: string
+          nullable: true
+        arrivalDate:
+          type: string
+          format: date
+        departureDate:
+          type: string
+          format: date
+        room_number:
+          type: string
+          nullable: true
+        apartment_number:
+          type: string
+          nullable: true
+        is_not_tourist:
+          type: boolean
+        reduced_tax:
+          type: boolean
+        citytaxExemptionCode:
+          type: string
+          nullable: true
+    GuestAddRequest:
+      type: object
+      required:
+        - id
+        - guestType
+        - birth_year
+        - gender
+        - ps_code
+        - arrivalDate
+        - departureDate
+      additionalProperties: false
+      description: 'Reduced-PII member to add to an existing group (#33).'
+      properties:
+        id:
+          type: string
+          maxLength: 128
+        guestType:
+          type: integer
+          enum:
+            - 19
+            - 20
+        birth_year:
+          type: integer
+          example: 1990
+        gender:
+          type: string
+          enum:
+            - M
+            - F
+        ps_code:
+          type: string
+        istat_code:
+          type: string
+          nullable: true
+        arrivalDate:
+          type: string
+          format: date
+        departureDate:
+          type: string
+          format: date
+        room_number:
+          type: string
+          nullable: true
+        apartment_number:
+          type: string
+          nullable: true
+        is_not_tourist:
+          type: boolean
+          default: false
+        reduced_tax:
+          type: boolean
+          default: false
+        citytaxExemptionCode:
+          type: string
+          nullable: true
+    GuestDeletedResponse:
+      type: object
+      required:
+        - deleted
+      additionalProperties: false
+      properties:
+        deleted:
+          type: boolean
     SendResult:
       type: object
       required:
@@ -419,6 +590,111 @@ components:
         error:
           type: string
           description: 'Empty for a successful member.'
+    GroupResponse:
+      type: object
+      required:
+        - leaderId
+        - arrivalDate
+        - members
+      additionalProperties: false
+      properties:
+        leaderId:
+          type: string
+          description: 'Leader external id.'
+        arrivalDate:
+          type: string
+          format: date
+        members:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/GuestMember'
+        updated:
+          type: integer
+          minimum: 1
+          description: 'Present on PATCH mass-departure; number of guests updated.'
+    GuestMember:
+      type: object
+      required:
+        - id
+        - guestType
+        - birth_year
+        - gender
+        - ps_code
+        - arrivalDate
+        - departureDate
+      additionalProperties: false
+      description: |
+        Reduced-PII guest shape aligned with CR-12 create contract (#31).
+        No first/last name; birth_year only.
+      properties:
+        id:
+          type: string
+          maxLength: 128
+          example: guest-12345
+        guestType:
+          type: integer
+          enum:
+            - 16
+            - 17
+            - 18
+            - 19
+            - 20
+        birth_year:
+          type: integer
+          nullable: true
+          example: 1985
+        gender:
+          type: string
+          nullable: true
+          enum:
+            - M
+            - F
+        ps_code:
+          type: string
+          nullable: true
+          description: 'Nation code (countries.ps_code).'
+          example: '100000100'
+        istat_code:
+          type: string
+          nullable: true
+          description: 'Province code (provinces.istat_code); Italia only.'
+          example: MI
+        arrivalDate:
+          type: string
+          format: date
+          nullable: true
+        departureDate:
+          type: string
+          format: date
+          nullable: true
+        room_number:
+          type: string
+          nullable: true
+          example: '101'
+        apartment_number:
+          type: string
+          nullable: true
+          example: A2
+        is_not_tourist:
+          type: boolean
+        reduced_tax:
+          type: boolean
+        citytaxExemptionCode:
+          type: string
+          nullable: true
+          example: '3'
+    GroupDepartureRequest:
+      type: object
+      required:
+        - departureDate
+      additionalProperties: false
+      properties:
+        departureDate:
+          type: string
+          format: date
+          description: 'New departure date applied to every guest in the group.'
+          example: '2026-09-10'
     DeleteGroupResponse:
       type: object
       required:
@@ -429,23 +705,93 @@ components:
           type: integer
           minimum: 1
           description: 'Number of deleted guest rows.'
+    ClosedMonthsResponse:
+      type: object
+      required:
+        - year
+        - closedMonths
+      additionalProperties: false
+      description: |
+        Closed (finalized) months for a license year. Totals are intentionally omitted (CR #ABIT-CR-12 / F14).
+      properties:
+        year:
+          type: integer
+          example: 2026
+        closedMonths:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClosedMonth'
+    ClosedMonth:
+      type: object
+      required:
+        - month
+        - closeDate
+      additionalProperties: false
+      properties:
+        month:
+          type: integer
+          minimum: 1
+          maximum: 12
+          example: 3
+        closeDate:
+          type: string
+          format: date
+          nullable: true
+          description: 'Calendar date when the month was finalized (`guests_monthly_totals.created_at`).'
+          example: '2026-04-02'
     Day:
       type: object
       required:
         - day
-        - status
+        - closed
       additionalProperties: false
       properties:
         day:
           type: string
           format: date
-        status:
-          type: string
+        closed:
+          type: integer
           enum:
-            - OPEN
-            - CLOSED
-            - INVALID
-            - BOOKED
+            - 0
+            - 1
+          description: |
+            Closure flag. GET /days returns only open days, so every listed
+            item has closed: 0. PUT open returns closed: 0; PUT close returns
+            closed: 1.
+    CountryLookup:
+      type: object
+      required:
+        - name
+        - ps_code
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: 'Country display name.'
+          example: Germania
+        ps_code:
+          type: string
+          description: |
+            Alloggiati / import nation code (countries.ps_code). Same value
+            stored in the guest import file origin_country field.
+          example: '100000216'
+    ProvinceLookup:
+      type: object
+      required:
+        - name
+        - istat_code
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: 'Province display name.'
+          example: Milano
+        istat_code:
+          type: string
+          description: |
+            Province code used by the guest import file (provinces.istat_code),
+            e.g. MI. Same value stored in origin_province.
+          example: MI
     Error:
       type: object
       required:
@@ -1014,6 +1360,29 @@ paths:
                 $ref: '#/components/schemas/AccommodationCityListResponse'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+  /api/v1/city-codes:
+    get:
+      tags:
+        - 'Integration APIs'
+      summary: 'List available cityCode values'
+      description: |
+        Returns the ISTAT municipality codes available in this deployment
+        (default province), for use as `cityCode` on licenses and public tax
+        exemptions. Requires the same Bearer token as other integrator routes.
+      operationId: listIntegrationCityCodes
+      responses:
+        '200':
+          description: 'Available cityCode values as a bare JSON array.'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CityCode'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
   '/api/v1/city-tax/exemptions/{cityCode}':
     get:
       tags:
@@ -1074,6 +1443,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LegacyErrorResponse'
+  /api/v1/countries:
+    get:
+      tags:
+        - 'Integration APIs'
+      summary: 'Look up countries by name or ps_code'
+      description: |
+        Authenticated reference lookup. Matches country `name` (partial) or
+        `ps_code` (exact / prefix) — the same code field the guest import file
+        uses for origin_country. Returns a bare JSON array; empty when no match.
+        No tenant-scoped data.
+      operationId: listIntegrationCountries
+      parameters:
+        -
+          name: q
+          in: query
+          required: false
+          description: 'Optional search string (country name or ps_code). Omit or leave blank to return the full list.'
+          schema:
+            type: string
+            example: Germania
+      responses:
+        '200':
+          description: 'Matching countries.'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CountryLookup'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
   '/api/v1/istat/calendar/{license}':
     post:
       tags:
@@ -1390,8 +1794,11 @@ paths:
     get:
       tags:
         - 'Integration APIs'
-      summary: 'List the days in a month'
-      description: 'Returns every calendar day in the requested month with its computed status.'
+      summary: 'List open days in a month'
+      description: |
+        Returns only open calendar days in the requested month. Every item has
+        `closed: 0`. Days with guests are included; closed and invalid days are omitted. There is no
+        `status` field.
       operationId: listIntegrationClosureDays
       parameters:
         -
@@ -1402,7 +1809,7 @@ paths:
           $ref: '#/components/parameters/Month'
       responses:
         '200':
-          description: 'One status entry per day in the month.'
+          description: 'Open days in the month (each with closed: 0).'
           content:
             application/json:
               schema:
@@ -1419,15 +1826,16 @@ paths:
           $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooManyRequests'
-  '/api/v1/licenses/{licenseId}/calendar/{year}/{month}/{day}/toggle':
-    post:
+  '/api/v1/licenses/{licenseId}/calendar/{year}/{month}/{day}/close':
+    put:
       tags:
         - 'Integration APIs'
-      summary: 'Toggle a day open or closed'
+      summary: 'Close a calendar day'
       description: |
-        Reopens a closed day or closes an open day. A day cannot be closed when
-        guests are present or when its status is INVALID.
-      operationId: toggleIntegrationClosureDay
+        Idempotently closes the day (sets closed=1). Does not toggle. Fails with
+        400 when guests are present on an open day, or when the day is in a
+        finalized month / outside the license range.
+      operationId: closeIntegrationClosureDay
       parameters:
         -
           $ref: '#/components/parameters/LicenseId'
@@ -1439,11 +1847,78 @@ paths:
           $ref: '#/components/parameters/DayOfMonth'
       responses:
         '200':
-          description: 'Updated day status.'
+          description: 'Day is closed (closed: 1).'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Day'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/LicenseNotAccessible'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  '/api/v1/licenses/{licenseId}/calendar/{year}/{month}/{day}/open':
+    put:
+      tags:
+        - 'Integration APIs'
+      summary: 'Open a calendar day'
+      description: |
+        Idempotently opens the day (sets closed=0, preserving occupancy data). Does not
+        toggle. Days in a finalized month or outside the license range return 400.
+      operationId: openIntegrationClosureDay
+      parameters:
+        -
+          $ref: '#/components/parameters/LicenseId'
+        -
+          $ref: '#/components/parameters/Year'
+        -
+          $ref: '#/components/parameters/Month'
+        -
+          $ref: '#/components/parameters/DayOfMonth'
+      responses:
+        '200':
+          description: 'Day is open (closed: 0).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Day'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/LicenseNotAccessible'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  '/api/v1/licenses/{licenseId}/closed-months/{year}':
+    get:
+      tags:
+        - 'Integration APIs'
+      summary: 'List closed months for a year'
+      description: |
+        Returns the finalized (closed) months for the given license and year,
+        each with its close date. Totals and aggregates are not included.
+        Read-only — does not open or close months.
+      operationId: listIntegrationClosedMonths
+      parameters:
+        -
+          $ref: '#/components/parameters/LicenseId'
+        -
+          $ref: '#/components/parameters/Year'
+      responses:
+        '200':
+          description: 'Closed months for the year (may be an empty list).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClosedMonthsResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1460,13 +1935,26 @@ paths:
         - 'Integration APIs'
       summary: 'Create a guest group'
       description: |
-        Creates a new stay. A group is identified by its leader's external ID
-        and arrival date within the license.
+        Creates a new stay. A group is identified by its leader's external ID and
+        arrival date within the license. A malformed or impossible leader arrival
+        date returns HTTP 400 before the duplicate-group check.
 
         Valid compositions are: type 16 alone; type 17 with one or more type 19
         members; or type 18 with one or more type 20 members. A composite group
         can return HTTP 200 with mixed per-member results when at least one member
-        is valid. Duplicate guest IDs within a group are rejected.
+        is valid. Duplicate guest IDs within a group are rejected; IDs are
+        compared case-insensitively. Every member must have the leader's
+        arrivalDate.
+
+        Removed/renamed member fields (`firstName`, `lastName`, `birthDate`,
+        `residenceCode`, `taxExeptionCode`, `roomNumber`) are **rejected** with a
+        per-guest error — they are not silently ignored. No first/last name is
+        stored or returned.
+
+        A guest also fails when its arrival or departure falls in a finalized
+        month, when its stay overlaps another stay of the same guest in the
+        license, or when it breaks the license end date. A new group never
+        changes the guests of another group.
       operationId: createIntegrationGuestGroup
       parameters:
         -
@@ -1497,14 +1985,98 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
   '/api/v1/licenses/{licenseId}/groups/{leaderId}/{arrivalDate}':
+    get:
+      tags:
+        - 'Integration APIs'
+      summary: 'Get a guest group'
+      description: |
+        Returns the group identified by leaderId + arrivalDate (same identity as
+        PUT/DELETE). Members use the reduced-PII contract (no first/last name;
+        birth_year only; ps_code / istat_code provenance).
+      operationId: getIntegrationGuestGroup
+      parameters:
+        -
+          $ref: '#/components/parameters/LicenseId'
+        -
+          $ref: '#/components/parameters/LeaderId'
+        -
+          $ref: '#/components/parameters/ArrivalDate'
+      responses:
+        '200':
+          description: 'Group found.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/LicenseNotAccessible'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    patch:
+      tags:
+        - 'Integration APIs'
+      summary: 'Set departure date for an entire group'
+      description: |
+        Sets `departureDate` on **every** guest in the group (leader + members)
+        inside a single DB transaction. departureDate must be a valid calendar date.
+        Both existing non-null departures and the new departure must be in an open month.
+        If any guest fails closed-month or
+        date validation, or the new departure makes its stay overlap another
+        stay of the same guest, the whole update is rejected (400) with
+        per-guest details — no silent partial success.
+      operationId: patchIntegrationGuestGroupDeparture
+      parameters:
+        -
+          $ref: '#/components/parameters/LicenseId'
+        -
+          $ref: '#/components/parameters/LeaderId'
+        -
+          $ref: '#/components/parameters/ArrivalDate'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupDepartureRequest'
+      responses:
+        '200':
+          description: 'Departure updated for all guests; returns the group.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/LicenseNotAccessible'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
     put:
       tags:
         - 'Integration APIs'
       summary: 'Replace a guest group'
       description: |
-        Atomically replaces an existing group. The leader's `id` and
+        Atomically **replaces the entire group** identified by leaderId +
+        arrivalDate: the previous leader and all members are deleted, then the
+        request body is inserted as the new group. The leader's `id` and
         `arrivalDate` in the body must match the path. If any guest is invalid,
-        the original group remains unchanged.
+        the original group remains unchanged. A group with any guest arriving
+        in a finalized month cannot be replaced (400). Guests follow the same rules as in
+        group creation; the group's own previous stays never count as overlaps.
       operationId: replaceIntegrationGuestGroup
       requestBody:
         required: true
@@ -1542,7 +2114,11 @@ paths:
       tags:
         - 'Integration APIs'
       summary: 'Delete a guest group'
-      description: 'Deletes the matching leader and all its members.'
+      description: |
+        Deletes the **entire group** identified by leaderId + arrivalDate (leader
+        and all members). Returns 404 with message "Group not found." when no
+        matching leader exists, and 400 when any guest of the group arrived in
+        a finalized month.
       operationId: deleteIntegrationGuestGroup
       responses:
         '200':
@@ -1551,6 +2127,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeleteGroupResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
@@ -1568,6 +2146,196 @@ paths:
           $ref: '#/components/parameters/LeaderId'
         -
           $ref: '#/components/parameters/ArrivalDate'
+  '/api/v1/licenses/{licenseId}/groups/{leaderId}/{arrivalDate}/guests':
+    put:
+      tags:
+        - 'Integration APIs'
+      summary: 'Add a guest to an existing group'
+      description: |
+        Adds one member (type 19 or 20) to the group identified by leaderId +
+        arrivalDate. Path includes arrivalDate for parity with PUT/DELETE group.
+        Body uses the reduced-PII contract. Fail-closed on closed months.
+        Returns 409 when the guest already has a stay overlapping this one.
+      operationId: addIntegrationGuestToGroup
+      parameters:
+        -
+          $ref: '#/components/parameters/LicenseId'
+        -
+          $ref: '#/components/parameters/LeaderId'
+        -
+          $ref: '#/components/parameters/ArrivalDate'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuestAddRequest'
+      responses:
+        '200':
+          description: 'Guest added; returns the new member.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestMember'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/LicenseNotAccessible'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  '/api/v1/licenses/{licenseId}/guests/{guestId}':
+    get:
+      tags:
+        - 'Integration APIs'
+      summary: 'Get a single guest stay'
+      description: |
+        Returns one stay by external guestId; for a returning guest, select the
+        stay with the arrivalDate query parameter.
+        Reduced-PII contract: no first/last name; birth_year only.
+      operationId: getIntegrationGuestStay
+      parameters:
+        -
+          $ref: '#/components/parameters/LicenseId'
+        -
+          $ref: '#/components/parameters/GuestId'
+        -
+          $ref: '#/components/parameters/StayArrivalDate'
+      responses:
+        '200':
+          description: 'Stay found.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestMember'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/LicenseNotAccessible'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    patch:
+      tags:
+        - 'Integration APIs'
+      summary: 'Update a guest stay'
+      description: |
+        Partial update following the CR-12 edit matrix described on the request
+        body: the editable fields depend on whether the arrival and departure
+        months are finalized, and leaderId, guestType, birth_year and gender
+        never change. New dates must be valid, outside finalized months and
+        within the license validity. Returns 409 when the changed dates overlap
+        another stay of the same guest, or when the guestId is ambiguous.
+      operationId: patchIntegrationGuestStay
+      parameters:
+        -
+          $ref: '#/components/parameters/LicenseId'
+        -
+          $ref: '#/components/parameters/GuestId'
+        -
+          $ref: '#/components/parameters/StayArrivalDate'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuestStayPatchRequest'
+      responses:
+        '200':
+          description: 'Stay updated.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestMember'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/LicenseNotAccessible'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    delete:
+      tags:
+        - 'Integration APIs'
+      summary: 'Delete a guest stay'
+      description: |
+        Deletes one stay when its arrival month is open. Leaders that still have
+        members must be removed via whole-group DELETE. A family/group leader must retain at least one member.
+      operationId: deleteIntegrationGuestStay
+      parameters:
+        -
+          $ref: '#/components/parameters/LicenseId'
+        -
+          $ref: '#/components/parameters/GuestId'
+        -
+          $ref: '#/components/parameters/StayArrivalDate'
+      responses:
+        '200':
+          description: 'Stay deleted.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestDeletedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/LicenseNotAccessible'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /api/v1/provinces:
+    get:
+      tags:
+        - 'Integration APIs'
+      summary: 'Look up provinces by name or istat_code'
+      description: |
+        Authenticated reference lookup. Matches province `name` (partial) or
+        `istat_code` (exact / prefix) — the same code field the guest import file
+        uses for origin_province. Returns a bare JSON array; empty when no match.
+        No tenant-scoped data.
+      operationId: listIntegrationProvinces
+      parameters:
+        -
+          name: q
+          in: query
+          required: false
+          description: 'Optional search string (province name or istat_code). Omit or leave blank to return the full list.'
+          schema:
+            type: string
+            example: Milano
+      responses:
+        '200':
+          description: 'Matching provinces.'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProvinceLookup'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
   /api/v1/token:
     post:
       tags:
