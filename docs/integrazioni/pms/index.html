@@ -225,6 +225,43 @@ supporto nella configurazione del PMS.</p>
 <p>Gli operatori che utilizzano la comunicazione <strong>tramite Web Service devono comunicare i dati anche nei mesi in cui la struttura è chiusa</strong>, ma non sono tenuti alla compilazione del calendario dei giorni di chiusura.</p>
 
 
-    </div>
+    
+<!-- CR12_INTEGRATION_API -->
+<h4 id="integration-api">API di integrazione PMS (CR ABIT-CR-12)</h4>
+<p>
+  Oltre al caricamento file e ai servizi legacy, ABIT espone un’API REST versionata
+  per i gestionali PMS sotto <code>/api/v1</code>.
+  Le route legacy <code>/integration/v1</code> restano disponibili solo per token, licenze e
+  POST/PUT/DELETE dei gruppi, con lo stesso contratto dei dati.
+  Il contratto machine-readable è pubblicato in
+  <a href="../swagger/">Swagger</a>.
+</p>
+<div class="alert alert-warning">
+  <strong>Sicurezza.</strong> Le route di integrazione richiedono autenticazione.
+  Ottenere un token con <code>POST /api/v1/token</code> (HTTP Basic, utente ruolo APPLICATION),
+  poi inviare <code>Authorization: Bearer &lt;token&gt;</code>.
+  Le operazioni su una pratica usano <code>/licenses/{licenseId}/…</code> e sono
+  limitate alle sole pratiche abilitate all’integratore (risposta <strong>403</strong> altrimenti).
+  Non includere password o token reali in esempi, ticket o screenshot.
+</div>
+<ul>
+  <li><strong>Licenze e city code</strong> — <code>GET /licenses</code>, <code>GET /city-codes</code></li>
+  <li><strong>Calendario</strong> — <code>GET …/calendar/{year}/{month}/days</code> (solo giorni aperti, <code>closed: 0</code>);
+      apertura/chiusura idempotenti con <code>PUT …/open</code> e <code>PUT …/close</code>.
+      L’endpoint <code>POST …/toggle</code> è <strong>rimosso</strong>.</li>
+  <li><strong>Provenienza</strong> — <code>GET /countries</code>, <code>GET /provinces</code> (<code>ps_code</code> / <code>istat_code</code>)</li>
+  <li><strong>Gruppi e ospiti</strong> — contratto a PII ridotta (solo anno di nascita; niente nome/cognome);
+      create/replace/delete gruppo; GET gruppo; PATCH partenza di massa; GET/PATCH/DELETE soggiorno; PUT aggiunta membro.
+      Il PATCH del soggiorno accetta solo i campi modificabili in base ai mesi chiusi; per un ospite con più
+      soggiorni indicare <code>?arrivalDate=</code>. I soggiorni sovrapposti dello stesso ospite sono rifiutati.</li>
+  <li><strong>Mesi chiusi</strong> — <code>GET …/closed-months/{year}</code> (mese + data di chiusura; <strong>senza totals</strong>)</li>
+</ul>
+<p>
+  Esempi eseguibili sono disponibili nella collection Bruno del repository ABIT
+  (<code>bruno/integration-api/</code>). Dettaglio testuale: documentazione in-repo
+  <code>docs/integration/cr12-external-api.md</code>.
+</p>
+
+</div>
 </body>
 </html>
