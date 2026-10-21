@@ -366,7 +366,7 @@ components:
         - guestType
         - birth_year
         - gender
-        - ps_code
+        - origin_ps_code
         - arrivalDate
         - departureDate
       additionalProperties: false
@@ -397,20 +397,18 @@ components:
           enum:
             - M
             - F
-        ps_code:
+        origin_ps_code:
           type: string
+          pattern: '^[0-9]{9}$'
           description: |
-            Nation code (`countries.ps_code`), same field as the guest import
-            file origin_country. Use GET /api/v1/countries?q= to resolve names.
-          example: '100000100'
-        istat_code:
-          type: string
-          nullable: true
-          description: |
-            Province code (`provinces.istat_code`) required when ps_code is
-            Italia (100000100); must be omitted for foreign nations. Same field
-            as import origin_province. Use GET /api/v1/provinces?q= to resolve.
-          example: MI
+            Questura (Alloggiati) code of the guest's origin: a foreign nation
+            (`countries.ps_code`, starts with 1) or an Italian comune
+            (`cities.ps_code`, starts with 4). Italia (100000100) is refused:
+            send the comune instead. For a comune ABIT stores Italy and the
+            comune's province, taken from the comune row valid on arrivalDate.
+            A JSON integer with the same nine digits is also accepted.
+            Use GET /api/v1/countries?q= to resolve nation names.
+          example: '403015209'
         arrivalDate:
           type: string
           format: date
@@ -456,23 +454,45 @@ components:
       type: object
       additionalProperties: false
       description: |
-        Send only the fields to change. Which fields are editable depends on the finalized months (CR-12 edit matrix): with the arrival month open, every property below; with the arrival month finalized and the departure unknown or in an open month, only departureDate, reduced_tax and citytaxExemptionCode; with both months finalized, none. leaderId, guestType, birth_year and gender are never editable; move a guest to another group with DELETE and PUT .../guests. The arrivalDate of a family/group component is part of the group identity and cannot change. A request with any field outside the allowed set returns 400 and changes nothing, as do removed field names (firstName, lastName, birthDate, residenceCode, taxExeptionCode, roomNumber).
+        Send the fields to change. Fields sent with the value GET returns are ignored, so the whole stay as read may be sent back with the changes applied. Which changed fields are allowed depends on the finalized months (CR-12 edit matrix): with the arrival month open, every property below; with the arrival month finalized and the departure unknown or in an open month, only departureDate, reduced_tax and citytaxExemptionCode; with both months finalized, none. leaderId, guestType, birth_year and gender are never editable; move a guest to another group with DELETE and PUT .../guests. The arrivalDate of a family/group component is part of the group identity and cannot change. A request that changes any field outside the allowed set returns 400 and changes nothing, as do removed field names (firstName, lastName, birthDate, residenceCode, taxExeptionCode, roomNumber, ps_code, istat_code).
       properties:
         id:
           type: string
           maxLength: 128
           description: 'Optional; must equal the path guestId.'
-        ps_code:
-          type: string
-        istat_code:
+        guestType:
+          type: integer
+          enum:
+            - 16
+            - 17
+            - 18
+            - 19
+            - 20
+          description: 'Never editable; accepted only with the current value.'
+        birth_year:
+          type: integer
+          nullable: true
+          description: 'Never editable; accepted only with the current value.'
+        gender:
           type: string
           nullable: true
+          enum:
+            - M
+            - F
+          description: 'Never editable; accepted only with the current value.'
+        origin_ps_code:
+          type: string
+          nullable: true
+          pattern: '^[0-9]{9}$'
+          description: |
+            A different code is resolved as on create (a JSON integer with the same digits is also accepted). The code GET returns, null included, keeps the stored nation and province.
         arrivalDate:
           type: string
           format: date
         departureDate:
           type: string
           format: date
+          nullable: true
         room_number:
           type: string
           nullable: true
@@ -493,7 +513,7 @@ components:
         - guestType
         - birth_year
         - gender
-        - ps_code
+        - origin_ps_code
         - arrivalDate
         - departureDate
       additionalProperties: false
@@ -515,11 +535,9 @@ components:
           enum:
             - M
             - F
-        ps_code:
+        origin_ps_code:
           type: string
-        istat_code:
-          type: string
-          nullable: true
+          pattern: '^[0-9]{9}$'
         arrivalDate:
           type: string
           format: date
@@ -620,7 +638,7 @@ components:
         - guestType
         - birth_year
         - gender
-        - ps_code
+        - origin_ps_code
         - arrivalDate
         - departureDate
       additionalProperties: false
@@ -650,16 +668,17 @@ components:
           enum:
             - M
             - F
-        ps_code:
+        origin_ps_code:
           type: string
           nullable: true
-          description: 'Nation code (countries.ps_code).'
-          example: '100000100'
-        istat_code:
-          type: string
-          nullable: true
-          description: 'Province code (provinces.istat_code); Italia only.'
-          example: MI
+          description: |
+            Nation code (`countries.ps_code`) for a foreign guest. For an
+            Italian guest ABIT keeps only the province, so this is the code of
+            its capital comune, not necessarily the comune that was sent. Null
+            when no comune can stand in for the province (none stored, or no
+            valid capital). Sending this value back in a PATCH keeps the stored
+            nation and province.
+          example: '403015146'
         arrivalDate:
           type: string
           format: date
@@ -1992,7 +2011,7 @@ paths:
       description: |
         Returns the group identified by leaderId + arrivalDate (same identity as
         PUT/DELETE). Members use the reduced-PII contract (no first/last name;
-        birth_year only; ps_code / istat_code provenance).
+        birth_year only; origin_ps_code provenance).
       operationId: getIntegrationGuestGroup
       parameters:
         -
